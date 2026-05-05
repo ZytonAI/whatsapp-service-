@@ -167,6 +167,10 @@ async function syncSessionStatus(ownerId, newStatus, phone) {
 
 // ─── Routes ──────────────────────────────────────────────────
 
+app.get("/", (_req, res) => {
+  res.json({ ok: true, service: "zyton-whatsapp-service", status });
+});
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
