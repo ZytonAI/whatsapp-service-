@@ -16,19 +16,19 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const NEXTJS_WEBHOOK_URL = process.env.NEXTJS_WEBHOOK_URL;
 const NEXTJS_WEBHOOK_SECRET = process.env.NEXTJS_WEBHOOK_SECRET;
 
-// Supabase es opcional al inicio — el servidor arranca igual sin credenciales
+// Supabase es opcional — el servidor arranca sin credenciales
 const supabase =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     : null;
 
 if (!supabase) {
-  console.warn("[WA] ADVERTENCIA: Supabase no configurado (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY faltantes)");
+  console.warn("[WA] ADVERTENCIA: Supabase no configurado");
 }
 
 // Estado en memoria
 let qrBase64 = null;
-let status = "disconnected"; // disconnected | connecting | connected
+let status = "disconnected";
 let connectedPhone = null;
 
 // ─── Cliente WhatsApp ────────────────────────────────────────
@@ -42,6 +42,12 @@ const puppeteerConfig = {
     "--disable-extensions",
     "--no-first-run",
     "--no-zygote",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--metrics-recording-only",
+    "--mute-audio",
+    "--safebrowsing-disable-auto-update",
   ],
 };
 
@@ -112,12 +118,6 @@ client.on("message", async (msg) => {
       console.error("[WA] Error enviando webhook:", err.message);
     }
   }
-});
-
-// Arrancar WA client sin bloquear el servidor
-client.initialize().catch((err) => {
-  console.error("[WA] Error al inicializar cliente WhatsApp:", err.message);
-  status = "disconnected";
 });
 
 // ─── Auth middleware ─────────────────────────────────────────
@@ -196,6 +196,22 @@ app.post("/send", auth, async (req, res) => {
   }
 });
 
+// ─── Mantener el proceso vivo aunque Chromium falle ──────────
+process.on("uncaughtException", (err) => {
+  console.error("[WA] uncaughtException — proceso sigue en pie:", err.message);
+  status = "disconnected";
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[WA] unhandledRejection:", reason);
+});
+
+// ─── Arrancar servidor PRIMERO, luego inicializar WA ─────────
 app.listen(PORT, () => {
   console.log(`[WA] Servicio corriendo en puerto ${PORT}`);
+
+  client.initialize().catch((err) => {
+    console.error("[WA] Error al inicializar cliente:", err.message);
+    status = "disconnected";
+  });
 });
