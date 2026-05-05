@@ -15,6 +15,7 @@ const cors = require("cors");
 const qrcode = require("qrcode");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const { createClient } = require("@supabase/supabase-js");
+const ws = require("ws");
 
 const app = express();
 app.use(cors());
@@ -31,7 +32,9 @@ const NEXTJS_WEBHOOK_SECRET = process.env.NEXTJS_WEBHOOK_SECRET;
 let supabase = null;
 try {
   if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
-    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      realtime: { transport: ws },
+    });
     console.log("[WA] Supabase inicializado");
   } else {
     console.warn("[WA] ADVERTENCIA: Supabase no configurado (faltan env vars)");
@@ -55,7 +58,6 @@ const puppeteerConfig = {
     "--disable-gpu",
     "--disable-extensions",
     "--no-first-run",
-    "--no-zygote",
     "--disable-background-networking",
     "--disable-default-apps",
     "--disable-sync",
