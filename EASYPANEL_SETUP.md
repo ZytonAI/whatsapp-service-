@@ -28,10 +28,10 @@ Tienes dos opciones:
 3. Dentro del proyecto → **+ New Service** → elige **App**
 4. Configura:
    - **Name:** `whatsapp-service`
-   - **Source:** GitHub (conecta tu repo) o **Upload** si subiste el zip
-   - **Root Directory:** `whatsapp-service` (si usas el repo completo)
-   - **Build Method:** `nixpacks` (EasyPanel lo detecta automáticamente con el `package.json`)
-   - **Start Command:** `node index.js`
+   - **Source:** GitHub (conecta tu repo)
+   - **Rama:** `main`
+   - **Build Method:** `Dockerfile`
+   - **Dockerfile path:** `Dockerfile` (o `/Dockerfile`)
 
 ---
 
@@ -70,20 +70,9 @@ En tu proyecto de Vercel → **Settings** → **Environment Variables**, agrega:
 
 ---
 
-## 6. Chromium / Puppeteer en el VPS
+## 6. Chromium / Puppeteer
 
-`whatsapp-web.js` usa Puppeteer (Chromium) internamente. EasyPanel ya incluye las dependencias del sistema necesarias en imágenes Nixpacks. Si ves errores de Chromium al arrancar, ejecuta en el terminal del VPS:
-
-```bash
-apt-get install -y \
-  chromium-browser \
-  libatk-bridge2.0-0 \
-  libxss1 \
-  libasound2 \
-  libgbm1
-```
-
-Y asegúrate de que en `index.js` los args de Puppeteer incluyen `--no-sandbox` (ya están configurados).
+Chromium ya está incluido en el `Dockerfile` del proyecto — no necesitas instalar nada manualmente en el VPS. El Dockerfile usa `node:20-slim` con Chromium del sistema y configura automáticamente las variables `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` y `PUPPETEER_EXECUTABLE_PATH`.
 
 ---
 
