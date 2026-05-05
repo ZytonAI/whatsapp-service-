@@ -1,4 +1,15 @@
 require("dotenv").config();
+
+// ─── Handlers PRIMERO — antes de cualquier otro código ───────
+process.on("uncaughtException", (err) => {
+  console.error("[WA] uncaughtException — proceso sigue en pie:", err.message);
+  status = "disconnected";
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[WA] unhandledRejection:", reason);
+});
+
 const express = require("express");
 const cors = require("cors");
 const qrcode = require("qrcode");
@@ -16,14 +27,17 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const NEXTJS_WEBHOOK_URL = process.env.NEXTJS_WEBHOOK_URL;
 const NEXTJS_WEBHOOK_SECRET = process.env.NEXTJS_WEBHOOK_SECRET;
 
-// Supabase es opcional — el servidor arranca sin credenciales
-const supabase =
-  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    : null;
-
-if (!supabase) {
-  console.warn("[WA] ADVERTENCIA: Supabase no configurado");
+// Supabase en try/catch — si las credenciales son inválidas no crashea el proceso
+let supabase = null;
+try {
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    console.log("[WA] Supabase inicializado");
+  } else {
+    console.warn("[WA] ADVERTENCIA: Supabase no configurado (faltan env vars)");
+  }
+} catch (err) {
+  console.error("[WA] Error inicializando Supabase:", err.message);
 }
 
 // Estado en memoria
@@ -132,17 +146,21 @@ function auth(req, res, next) {
 // ─── Sincronizar estado de sesión en Supabase ─────────────────
 async function syncSessionStatus(ownerId, newStatus, phone) {
   if (!supabase) return;
-  if (!ownerId) {
-    await supabase
-      .from("wa_sessions")
-      .update({ status: newStatus, phone, updated_at: new Date().toISOString() })
-      .neq("id", "00000000-0000-0000-0000-000000000000");
-    return;
+  try {
+    if (!ownerId) {
+      await supabase
+        .from("wa_sessions")
+        .update({ status: newStatus, phone, updated_at: new Date().toISOString() })
+        .neq("id", "00000000-0000-0000-0000-000000000000");
+      return;
+    }
+    await supabase.from("wa_sessions").upsert(
+      { owner_id: ownerId, status: newStatus, phone, updated_at: new Date().toISOString() },
+      { onConflict: "owner_id" }
+    );
+  } catch (err) {
+    console.error("[WA] Error sincronizando Supabase:", err.message);
   }
-  await supabase.from("wa_sessions").upsert(
-    { owner_id: ownerId, status: newStatus, phone, updated_at: new Date().toISOString() },
-    { onConflict: "owner_id" }
-  );
 }
 
 // ─── Routes ──────────────────────────────────────────────────
@@ -194,16 +212,6 @@ app.post("/send", auth, async (req, res) => {
     console.error("[WA] Error enviando mensaje:", err.message);
     res.status(500).json({ error: err.message });
   }
-});
-
-// ─── Mantener el proceso vivo aunque Chromium falle ──────────
-process.on("uncaughtException", (err) => {
-  console.error("[WA] uncaughtException — proceso sigue en pie:", err.message);
-  status = "disconnected";
-});
-
-process.on("unhandledRejection", (reason) => {
-  console.error("[WA] unhandledRejection:", reason);
 });
 
 // ─── Arrancar servidor PRIMERO, luego inicializar WA ─────────
