@@ -48,7 +48,7 @@ let qrBase64 = null;
 let status = "disconnected";
 let connectedPhone = null;
 
-// ─── Cliente WhatsApp ────────────────────────────────────────
+// ─── Puppeteer config ────────────────────────────────────────
 const puppeteerConfig = {
   headless: true,
   args: [
@@ -69,80 +69,6 @@ const puppeteerConfig = {
 
 if (process.env.PUPPETEER_EXECUTABLE_PATH) {
   puppeteerConfig.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-}
-
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: "./wa_session" }),
-  puppeteer: puppeteerConfig,
-});
-
-client.on("qr", async (qr) => {
-  status = "connecting";
-  qrBase64 = await qrcode.toDataURL(qr);
-  console.log("[WA] QR generado");
-  await syncSessionStatus(null, "connecting", null, qrBase64);
-});
-
-client.on("ready", async () => {
-  status = "connected";
-  qrBase64 = null;
-  const info = client.info;
-  connectedPhone = info.wid.user;
-  console.log(`[WA] Conectado como ${connectedPhone}`);
-  await syncSessionStatus(null, "connected", connectedPhone, null);
-});
-
-client.on("disconnected", async (reason) => {
-  status = "disconnected";
-  qrBase64 = null;
-  connectedPhone = null;
-  console.log("[WA] Desconectado:", reason);
-  await syncSessionStatus(null, "disconnected", null, null);
-});
-
-client.on("message", async (msg) => {
-  if (msg.fromMe) return;
-  console.log(`[WA] Mensaje de ${msg.from}: ${msg.body}`);
-
-  let contactName = null;
-  try {
-    const contact = await msg.getContact();
-    contactName = contact.pushname || contact.name || null;
-  } catch {}
-
-  const payload = {
-    wa_chat_id: msg.from,
-    contact_phone: msg.from.split("@")[0],
-    contact_name: contactName,
-    wa_message_id: msg.id._serialized,
-    body: msg.body,
-    direction: "inbound",
-    timestamp: new Date(msg.timestamp * 1000).toISOString(),
-  };
-
-  if (NEXTJS_WEBHOOK_URL) {
-    try {
-      await fetch(NEXTJS_WEBHOOK_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-webhook-secret": NEXTJS_WEBHOOK_SECRET || "",
-        },
-        body: JSON.stringify(payload),
-      });
-    } catch (err) {
-      console.error("[WA] Error enviando webhook:", err.message);
-    }
-  }
-});
-
-// ─── Auth middleware ─────────────────────────────────────────
-function auth(req, res, next) {
-  const token = req.headers["x-bridge-token"];
-  if (!BRIDGE_TOKEN || token !== BRIDGE_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  next();
 }
 
 // ─── Sincronizar estado de sesión en Supabase ─────────────────
@@ -166,6 +92,88 @@ async function syncSessionStatus(ownerId, newStatus, phone, qr = null) {
   }
 }
 
+// ─── Crear cliente WhatsApp ───────────────────────────────────
+// Se llama también al reconectar tras logout para tener una instancia limpia
+let client = null;
+
+function createWaClient() {
+  const c = new Client({
+    authStrategy: new LocalAuth({ dataPath: "./wa_session" }),
+    puppeteer: puppeteerConfig,
+  });
+
+  c.on("qr", async (qr) => {
+    status = "connecting";
+    qrBase64 = await qrcode.toDataURL(qr);
+    console.log("[WA] QR generado");
+    await syncSessionStatus(null, "connecting", null, qrBase64);
+  });
+
+  c.on("ready", async () => {
+    status = "connected";
+    qrBase64 = null;
+    const info = c.info;
+    connectedPhone = info.wid.user;
+    console.log(`[WA] Conectado como ${connectedPhone}`);
+    await syncSessionStatus(null, "connected", connectedPhone, null);
+  });
+
+  c.on("disconnected", async (reason) => {
+    status = "disconnected";
+    qrBase64 = null;
+    connectedPhone = null;
+    console.log("[WA] Desconectado:", reason);
+    await syncSessionStatus(null, "disconnected", null, null);
+  });
+
+  c.on("message", async (msg) => {
+    if (msg.fromMe) return;
+    console.log(`[WA] Mensaje de ${msg.from}: ${msg.body}`);
+
+    let contactName = null;
+    try {
+      const contact = await msg.getContact();
+      contactName = contact.pushname || contact.name || null;
+    } catch {}
+
+    const payload = {
+      wa_chat_id: msg.from,
+      contact_phone: msg.from.split("@")[0],
+      contact_name: contactName,
+      wa_message_id: msg.id._serialized,
+      body: msg.body,
+      direction: "inbound",
+      timestamp: new Date(msg.timestamp * 1000).toISOString(),
+    };
+
+    if (NEXTJS_WEBHOOK_URL) {
+      try {
+        await fetch(NEXTJS_WEBHOOK_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-webhook-secret": NEXTJS_WEBHOOK_SECRET || "",
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        console.error("[WA] Error enviando webhook:", err.message);
+      }
+    }
+  });
+
+  return c;
+}
+
+// ─── Auth middleware ─────────────────────────────────────────
+function auth(req, res, next) {
+  const token = req.headers["x-bridge-token"];
+  if (!BRIDGE_TOKEN || token !== BRIDGE_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
+
 // ─── Routes ──────────────────────────────────────────────────
 
 app.get("/", (_req, res) => {
@@ -185,6 +193,10 @@ app.post("/reconnect", auth, async (_req, res) => {
     return res.json({ message: "Ya está conectado" });
   }
   try {
+    // Si el cliente está en estado roto, crear uno nuevo
+    if (!client) {
+      client = createWaClient();
+    }
     await client.initialize();
     res.json({ message: "Reconectando..." });
   } catch (err) {
@@ -193,11 +205,10 @@ app.post("/reconnect", auth, async (_req, res) => {
 });
 
 app.post("/disconnect", auth, async (_req, res) => {
-  // Actualizar estado inmediatamente para que los polls no vean "connected"
   status = "disconnected";
   qrBase64 = null;
   connectedPhone = null;
-  syncSessionStatus(null, "disconnected", null).catch(() => {});
+  syncSessionStatus(null, "disconnected", null, null).catch(() => {});
 
   try {
     await client.logout();
@@ -205,11 +216,18 @@ app.post("/disconnect", auth, async (_req, res) => {
     console.error("[WA] Error en logout:", err.message);
   }
 
+  try {
+    await client.destroy();
+  } catch (err) {
+    console.error("[WA] Error destruyendo cliente:", err.message);
+  }
+
   res.json({ message: "Desconectado" });
 
-  // Reinicializar para generar nuevo QR
+  // Crear instancia nueva y reinicializar para generar nuevo QR
   setTimeout(async () => {
     try {
+      client = createWaClient();
       await client.initialize();
     } catch (err) {
       console.error("[WA] Error reinicializando tras logout:", err.message);
@@ -240,7 +258,7 @@ app.post("/send", auth, async (req, res) => {
 // ─── Arrancar servidor PRIMERO, luego inicializar WA ─────────
 app.listen(PORT, () => {
   console.log(`[WA] Servicio corriendo en puerto ${PORT}`);
-
+  client = createWaClient();
   client.initialize().catch((err) => {
     console.error("[WA] Error al inicializar cliente:", err.message);
     status = "disconnected";
