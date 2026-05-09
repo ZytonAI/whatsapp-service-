@@ -136,16 +136,79 @@ function createWaClient() {
       contactName = contact.pushname || contact.name || null;
     } catch {}
 
-    const payload = {
-      wa_chat_id: msg.from,
-      contact_phone: msg.from.split("@")[0],
-      contact_name: contactName,
-      wa_message_id: msg.id._serialized,
-      body: msg.body,
-      direction: "inbound",
-      timestamp: new Date(msg.timestamp * 1000).toISOString(),
-    };
+    const waChatId = msg.from;
+    const contactPhone = msg.from.split("@")[0];
+    const waMessageId = msg.id._serialized;
+    const body = msg.body;
+    const timestamp = new Date(msg.timestamp * 1000).toISOString();
 
+    // ── Guardar directamente en Supabase (más confiable que webhook) ──
+    if (supabase) {
+      try {
+        // Obtener owner_id de la sesión activa
+        const { data: session } = await supabase
+          .from("wa_sessions")
+          .select("owner_id")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (session) {
+          const ownerId = session.owner_id;
+
+          // Crear o actualizar conversación
+          const { data: conv } = await supabase
+            .from("conversations")
+            .upsert(
+              {
+                owner_id: ownerId,
+                wa_chat_id: waChatId,
+                contact_phone: contactPhone,
+                contact_name: contactName ?? null,
+                last_message: body,
+                last_message_at: timestamp,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "owner_id,wa_chat_id", ignoreDuplicates: false }
+            )
+            .select()
+            .single();
+
+          if (conv) {
+            // Insertar mensaje
+            const { error: msgErr } = await supabase.from("messages").upsert(
+              {
+                owner_id: ownerId,
+                conversation_id: conv.id,
+                wa_message_id: waMessageId,
+                direction: "inbound",
+                body,
+                status: "delivered",
+                created_at: timestamp,
+              },
+              { onConflict: "wa_message_id", ignoreDuplicates: true }
+            );
+
+            if (msgErr) {
+              console.error("[WA] Error guardando mensaje en Supabase:", msgErr.message);
+            } else {
+              // Incrementar mensajes no leídos
+              await supabase
+                .from("conversations")
+                .update({ unread_count: (conv.unread_count ?? 0) + 1 })
+                .eq("id", conv.id);
+              console.log(`[WA] Mensaje guardado en Supabase — conv: ${conv.id}`);
+            }
+          }
+        } else {
+          console.warn("[WA] No hay sesión WA en Supabase para asociar el mensaje");
+        }
+      } catch (err) {
+        console.error("[WA] Error guardando en Supabase:", err.message);
+      }
+    }
+
+    // ── Webhook a Next.js como respaldo ──────────────────────────
     if (NEXTJS_WEBHOOK_URL) {
       try {
         const whRes = await fetch(NEXTJS_WEBHOOK_URL, {
@@ -154,15 +217,12 @@ function createWaClient() {
             "Content-Type": "application/json",
             "x-webhook-secret": NEXTJS_WEBHOOK_SECRET || "",
           },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ wa_chat_id: waChatId, contact_phone: contactPhone, contact_name: contactName, wa_message_id: waMessageId, body, timestamp }),
         });
-        const whBody = await whRes.text();
-        console.log(`[WA] Webhook → ${whRes.status}: ${whBody}`);
+        console.log(`[WA] Webhook → ${whRes.status}`);
       } catch (err) {
         console.error("[WA] Error enviando webhook:", err.message);
       }
-    } else {
-      console.warn("[WA] NEXTJS_WEBHOOK_URL no configurado — mensaje no enviado");
     }
   });
 
