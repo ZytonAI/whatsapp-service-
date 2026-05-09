@@ -195,6 +195,14 @@ app.post("/disconnect", auth, async (_req, res) => {
   try {
     await client.logout();
     res.json({ message: "Desconectado" });
+    // Reinicializar para generar nuevo QR de inmediato
+    setTimeout(async () => {
+      try {
+        await client.initialize();
+      } catch (err) {
+        console.error("[WA] Error reinicializando tras logout:", err.message);
+      }
+    }, 2000);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
