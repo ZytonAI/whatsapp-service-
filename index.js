@@ -80,7 +80,7 @@ client.on("qr", async (qr) => {
   status = "connecting";
   qrBase64 = await qrcode.toDataURL(qr);
   console.log("[WA] QR generado");
-  await syncSessionStatus(null, "connecting", null);
+  await syncSessionStatus(null, "connecting", null, qrBase64);
 });
 
 client.on("ready", async () => {
@@ -89,7 +89,7 @@ client.on("ready", async () => {
   const info = client.info;
   connectedPhone = info.wid.user;
   console.log(`[WA] Conectado como ${connectedPhone}`);
-  await syncSessionStatus(null, "connected", connectedPhone);
+  await syncSessionStatus(null, "connected", connectedPhone, null);
 });
 
 client.on("disconnected", async (reason) => {
@@ -97,7 +97,7 @@ client.on("disconnected", async (reason) => {
   qrBase64 = null;
   connectedPhone = null;
   console.log("[WA] Desconectado:", reason);
-  await syncSessionStatus(null, "disconnected", null);
+  await syncSessionStatus(null, "disconnected", null, null);
 });
 
 client.on("message", async (msg) => {
@@ -146,18 +146,19 @@ function auth(req, res, next) {
 }
 
 // ─── Sincronizar estado de sesión en Supabase ─────────────────
-async function syncSessionStatus(ownerId, newStatus, phone) {
+async function syncSessionStatus(ownerId, newStatus, phone, qr = null) {
   if (!supabase) return;
   try {
+    const payload = { status: newStatus, phone, qr_code: qr, updated_at: new Date().toISOString() };
     if (!ownerId) {
       await supabase
         .from("wa_sessions")
-        .update({ status: newStatus, phone, updated_at: new Date().toISOString() })
+        .update(payload)
         .neq("id", "00000000-0000-0000-0000-000000000000");
       return;
     }
     await supabase.from("wa_sessions").upsert(
-      { owner_id: ownerId, status: newStatus, phone, updated_at: new Date().toISOString() },
+      { owner_id: ownerId, ...payload },
       { onConflict: "owner_id" }
     );
   } catch (err) {
