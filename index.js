@@ -148,7 +148,7 @@ function createWaClient() {
 
     if (NEXTJS_WEBHOOK_URL) {
       try {
-        await fetch(NEXTJS_WEBHOOK_URL, {
+        const whRes = await fetch(NEXTJS_WEBHOOK_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -156,9 +156,13 @@ function createWaClient() {
           },
           body: JSON.stringify(payload),
         });
+        const whBody = await whRes.text();
+        console.log(`[WA] Webhook → ${whRes.status}: ${whBody}`);
       } catch (err) {
         console.error("[WA] Error enviando webhook:", err.message);
       }
+    } else {
+      console.warn("[WA] NEXTJS_WEBHOOK_URL no configurado — mensaje no enviado");
     }
   });
 
