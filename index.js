@@ -192,20 +192,28 @@ app.post("/reconnect", auth, async (_req, res) => {
 });
 
 app.post("/disconnect", auth, async (_req, res) => {
+  // Actualizar estado inmediatamente para que los polls no vean "connected"
+  status = "disconnected";
+  qrBase64 = null;
+  connectedPhone = null;
+  syncSessionStatus(null, "disconnected", null).catch(() => {});
+
   try {
     await client.logout();
-    res.json({ message: "Desconectado" });
-    // Reinicializar para generar nuevo QR de inmediato
-    setTimeout(async () => {
-      try {
-        await client.initialize();
-      } catch (err) {
-        console.error("[WA] Error reinicializando tras logout:", err.message);
-      }
-    }, 2000);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("[WA] Error en logout:", err.message);
   }
+
+  res.json({ message: "Desconectado" });
+
+  // Reinicializar para generar nuevo QR
+  setTimeout(async () => {
+    try {
+      await client.initialize();
+    } catch (err) {
+      console.error("[WA] Error reinicializando tras logout:", err.message);
+    }
+  }, 2000);
 });
 
 app.post("/send", auth, async (req, res) => {
