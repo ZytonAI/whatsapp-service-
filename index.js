@@ -331,7 +331,29 @@ app.post("/send-file", auth, async (req, res) => {
 
   try {
     const chatId = to.includes("@") ? to : `${to}@c.us`;
-    const media = new MessageMedia(mimeType, base64, fileName ?? null);
+    let media;
+
+    if (mimeType === "text/html") {
+      // Convertir HTML a PDF usando el browser de Puppeteer que ya tiene whatsapp-web.js
+      const htmlContent = Buffer.from(base64, "base64").toString("utf-8");
+      const page = await client.pupBrowser.newPage();
+      try {
+        await page.setContent(htmlContent, { waitUntil: "networkidle0", timeout: 30000 });
+        const pdfBuffer = await page.pdf({
+          format: "A4",
+          printBackground: true,
+          margin: { top: "20mm", bottom: "20mm", left: "15mm", right: "15mm" },
+        });
+        const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
+        const pdfName = (fileName ?? "informe").replace(/\.html?$/i, "") + ".pdf";
+        media = new MessageMedia("application/pdf", pdfBase64, pdfName);
+      } finally {
+        await page.close().catch(() => {});
+      }
+    } else {
+      media = new MessageMedia(mimeType, base64, fileName ?? null);
+    }
+
     const msg = await client.sendMessage(chatId, media);
     res.json({ ok: true, wa_message_id: msg.id._serialized });
   } catch (err) {
