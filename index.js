@@ -156,23 +156,79 @@ function createWaClient() {
         if (session) {
           const ownerId = session.owner_id;
 
-          // Crear o actualizar conversación
-          const { data: conv } = await supabase
+          // Buscar conversación existente: primero por wa_chat_id exacto,
+          // luego por los últimos 10 dígitos del teléfono (maneja códigos de país faltantes)
+          let conv = null;
+
+          const { data: exactMatch } = await supabase
             .from("conversations")
-            .upsert(
-              {
-                owner_id: ownerId,
-                wa_chat_id: waChatId,
-                contact_phone: contactPhone,
-                contact_name: contactName ?? null,
+            .select("*")
+            .eq("owner_id", ownerId)
+            .eq("wa_chat_id", waChatId)
+            .maybeSingle();
+
+          if (exactMatch) {
+            conv = exactMatch;
+            // Actualizar last_message y nombre si cambió
+            const { data: updated } = await supabase
+              .from("conversations")
+              .update({
+                contact_name: contactName ?? exactMatch.contact_name,
                 last_message: body,
                 last_message_at: timestamp,
                 updated_at: new Date().toISOString(),
-              },
-              { onConflict: "owner_id,wa_chat_id", ignoreDuplicates: false }
-            )
-            .select()
-            .single();
+              })
+              .eq("id", exactMatch.id)
+              .select()
+              .single();
+            conv = updated ?? exactMatch;
+          } else {
+            // Buscar por sufijo de teléfono (últimos 10 dígitos) para manejar código de país
+            const phoneSuffix = contactPhone.slice(-10);
+            const { data: phoneMatch } = await supabase
+              .from("conversations")
+              .select("*")
+              .eq("owner_id", ownerId)
+              .like("contact_phone", `%${phoneSuffix}`)
+              .order("updated_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (phoneMatch) {
+              // Fusionar: actualizar wa_chat_id al formato canónico de WhatsApp
+              console.log(`[WA] Fusionando conversación — ${phoneMatch.wa_chat_id} → ${waChatId}`);
+              const { data: updated } = await supabase
+                .from("conversations")
+                .update({
+                  wa_chat_id: waChatId,
+                  contact_phone: contactPhone,
+                  contact_name: contactName ?? phoneMatch.contact_name,
+                  last_message: body,
+                  last_message_at: timestamp,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", phoneMatch.id)
+                .select()
+                .single();
+              conv = updated ?? phoneMatch;
+            } else {
+              // No existe — crear nueva conversación
+              const { data: newConv } = await supabase
+                .from("conversations")
+                .insert({
+                  owner_id: ownerId,
+                  wa_chat_id: waChatId,
+                  contact_phone: contactPhone,
+                  contact_name: contactName ?? null,
+                  last_message: body,
+                  last_message_at: timestamp,
+                  updated_at: new Date().toISOString(),
+                })
+                .select()
+                .single();
+              conv = newConv;
+            }
+          }
 
           if (conv) {
             // Insertar mensaje
