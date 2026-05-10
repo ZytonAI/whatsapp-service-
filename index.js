@@ -13,7 +13,7 @@ process.on("unhandledRejection", (reason) => {
 const express = require("express");
 const cors = require("cors");
 const qrcode = require("qrcode");
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const { createClient } = require("@supabase/supabase-js");
 const ws = require("ws");
 
@@ -315,6 +315,27 @@ app.post("/send", auth, async (req, res) => {
     res.json({ ok: true, wa_message_id: msg.id._serialized });
   } catch (err) {
     console.error("[WA] Error enviando mensaje:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/send-file", auth, async (req, res) => {
+  const { to, base64, mimeType, fileName } = req.body;
+
+  if (!to || !base64 || !mimeType) {
+    return res.status(400).json({ error: "Faltan campos: to, base64, mimeType" });
+  }
+  if (status !== "connected") {
+    return res.status(503).json({ error: "WhatsApp no está conectado" });
+  }
+
+  try {
+    const chatId = to.includes("@") ? to : `${to}@c.us`;
+    const media = new MessageMedia(mimeType, base64, fileName ?? null);
+    const msg = await client.sendMessage(chatId, media);
+    res.json({ ok: true, wa_message_id: msg.id._serialized });
+  } catch (err) {
+    console.error("[WA] Error enviando archivo:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
