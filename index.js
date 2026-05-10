@@ -329,27 +329,40 @@ app.post("/send-file", auth, async (req, res) => {
     return res.status(503).json({ error: "WhatsApp no está conectado" });
   }
 
+  let browser = null;
   try {
     const chatId = to.includes("@") ? to : `${to}@c.us`;
     let media;
 
     if (mimeType === "text/html") {
-      // Convertir HTML a PDF usando el browser de Puppeteer que ya tiene whatsapp-web.js
       const htmlContent = Buffer.from(base64, "base64").toString("utf-8");
-      const page = await client.pupBrowser.newPage();
-      try {
-        await page.setContent(htmlContent, { waitUntil: "networkidle0", timeout: 30000 });
-        const pdfBuffer = await page.pdf({
-          format: "A4",
-          printBackground: true,
-          margin: { top: "20mm", bottom: "20mm", left: "15mm", right: "15mm" },
-        });
-        const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
-        const pdfName = (fileName ?? "informe").replace(/\.html?$/i, "") + ".pdf";
-        media = new MessageMedia("application/pdf", pdfBase64, pdfName);
-      } finally {
-        await page.close().catch(() => {});
-      }
+
+      // Lanzar browser separado para la conversión (más estable que reutilizar el de WA)
+      const puppeteer = require("puppeteer");
+      browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+        ],
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      });
+
+      const page = await browser.newPage();
+      await page.setContent(htmlContent, { waitUntil: "domcontentloaded", timeout: 15000 });
+      const pdfBuffer = await page.pdf({
+        format: "A4",
+        printBackground: true,
+        margin: { top: "20mm", bottom: "20mm", left: "15mm", right: "15mm" },
+      });
+      await page.close();
+
+      const pdfBase64 = Buffer.from(pdfBuffer).toString("base64");
+      const pdfName = (fileName ?? "informe").replace(/\.html?$/i, "") + ".pdf";
+      console.log(`[WA] HTML convertido a PDF: ${pdfName} (${pdfBuffer.length} bytes)`);
+      media = new MessageMedia("application/pdf", pdfBase64, pdfName);
     } else {
       media = new MessageMedia(mimeType, base64, fileName ?? null);
     }
@@ -357,8 +370,11 @@ app.post("/send-file", auth, async (req, res) => {
     const msg = await client.sendMessage(chatId, media);
     res.json({ ok: true, wa_message_id: msg.id._serialized });
   } catch (err) {
-    console.error("[WA] Error enviando archivo:", err.message);
-    res.status(500).json({ error: err.message });
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("[WA] Error enviando archivo:", errMsg);
+    res.status(500).json({ error: errMsg });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
 });
 
