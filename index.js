@@ -131,13 +131,17 @@ function createWaClient() {
     console.log(`[WA] Mensaje de ${msg.from}: ${msg.body}`);
 
     let contactName = null;
+    let realPhone = null;
     try {
       const contact = await msg.getContact();
       contactName = contact.pushname || contact.name || null;
+      // Para contactos @lid (WhatsApp Business/linked device), obtener el número real
+      if (contact.number) realPhone = contact.number;
     } catch {}
 
     const waChatId = msg.from;
-    const contactPhone = msg.from.split("@")[0];
+    // Si es @lid y tenemos el número real, usarlo para el matching; si no, usar el ID raw
+    const contactPhone = realPhone || msg.from.split("@")[0];
     const waMessageId = msg.id._serialized;
     const body = msg.body;
     const timestamp = new Date(msg.timestamp * 1000).toISOString();
